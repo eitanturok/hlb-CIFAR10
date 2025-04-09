@@ -1,0 +1,7 @@
+# ignore python
+.venv/
+.mypy_cache/
+
+# ignore data
+data.pt
+cifar10/
