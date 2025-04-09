@@ -21,6 +21,13 @@ from torch import nn
 import torchvision
 from torchvision import transforms
 
+if os.getenv("TINY_BACKEND") == '1':
+    import tinygrad.frontend.torch
+    device = torch.device("tiny")
+else:
+    device = torch.device("mps")
+print(f'Using {device=}')
+
 ## <-- teaching comments
 # <-- functional comments
 # You can run 'sed -i.bak '/\#\#/d' ./main.py' to remove the teaching comments if they are in the way of your work. <3
@@ -74,7 +81,7 @@ hyp = {
             'every_n_steps': 5,
         },
         'train_epochs': 12.1,
-        'device': 'cuda',
+        'device': device,
         'data_location': 'data.pt',
     }
 }
@@ -93,9 +100,9 @@ if not os.path.exists(hyp['misc']['data_location']):
 
         # use the dataloader to get a single batch of all of the dataset items at once.
         train_dataset_gpu_loader = torch.utils.data.DataLoader(cifar10, batch_size=len(cifar10), drop_last=True,
-                                                  shuffle=True, num_workers=2, persistent_workers=False)
+                                                    shuffle=True, num_workers=0, persistent_workers=False)
         eval_dataset_gpu_loader = torch.utils.data.DataLoader(cifar10_eval, batch_size=len(cifar10_eval), drop_last=True,
-                                                  shuffle=False, num_workers=1, persistent_workers=False)
+                                                    shuffle=False, num_workers=0, persistent_workers=False)
 
         train_dataset_gpu = {}
         eval_dataset_gpu = {}
@@ -210,7 +217,7 @@ class ConvGroup(nn.Module):
 class FastGlobalMaxPooling(nn.Module):
     def __init__(self):
         super().__init__()
-    
+
     def forward(self, x):
         # Previously was chained torch.max calls.
         # requires less time than AdaptiveMax2dPooling -- about ~.3s for the entire run, in fact (which is pretty significant! :O :D :O :O <3 <3 <3 <3)
@@ -270,7 +277,7 @@ def set_whitening_conv(conv_layer, eigenvalues, eigenvectors, eps=1e-2, freeze=T
     conv_layer.weight.data = torch.cat((eigenvectors_sliced, -eigenvectors_sliced), dim=0)
     ## We don't want to train this, since this is implicitly whitening over the whole dataset
     ## For more info, see David Page's original blogposts (link in the README.md as of this commit.)
-    if freeze: 
+    if freeze:
         conv_layer.weight.requires_grad = False
 
 
@@ -352,11 +359,11 @@ def make_net():
 
                 # Add the implicit residual to the already-initialized convolutional transition layer.
                 # One can use more sophisticated initializations, but this one appeared worked best in testing.
-                # What this does is brings up the features from the previous residual block virtually, so not only 
+                # What this does is brings up the features from the previous residual block virtually, so not only
                 # do we have residual information flow within each block, we have a nearly direct connection from
                 # the early layers of the network to the loss function.
                 std_pre, mean_pre = torch.std_mean(net.net_dict[layer_name].conv1.weight.data)
-                net.net_dict[layer_name].conv1.weight.data = net.net_dict[layer_name].conv1.weight.data + dirac_weights_in 
+                net.net_dict[layer_name].conv1.weight.data = net.net_dict[layer_name].conv1.weight.data + dirac_weights_in
                 std_post, mean_post = torch.std_mean(net.net_dict[layer_name].conv1.weight.data)
 
                 # Renormalize the weights to match the original initialization statistics
@@ -407,7 +414,7 @@ def make_random_square_masks(inputs, mask_size):
 
 def batch_cutmix(inputs, targets, patch_size):
     with torch.no_grad():
-        batch_permuted = torch.randperm(inputs.shape[0], device='cuda')
+        batch_permuted = torch.randperm(inputs.shape[0], device=device)
         cutmix_batch_mask = make_random_square_masks(inputs, patch_size)
         if cutmix_batch_mask is None:
             return inputs, targets # if the mask is None, then that's because the patch size was set to 0 and we will not be using cutmix today.
@@ -457,7 +464,7 @@ class NetworkEMA(nn.Module):
 @torch.no_grad()
 def get_batches(data_dict, key, batchsize, epoch_fraction=1., cutmix_size=None):
     num_epoch_examples = len(data_dict[key]['images'])
-    shuffled = torch.randperm(num_epoch_examples, device='cuda')
+    shuffled = torch.randperm(num_epoch_examples, device=device)
     if epoch_fraction < 1:
         shuffled = shuffled[:batchsize * round(epoch_fraction * shuffled.shape[0]/batchsize)] # TODO: Might be slightly inaccurate, let's fix this later... :) :D :confetti: :fireworks:
         num_epoch_examples = shuffled.shape[0]
@@ -561,8 +568,8 @@ def main():
     lr_sched_bias = torch.optim.lr_scheduler.OneCycleLR(opt_bias, max_lr=bias_params['lr'], pct_start=pct_start, div_factor=initial_div_factor, final_div_factor=1./(initial_div_factor*final_lr_ratio), total_steps=total_train_steps, anneal_strategy='linear', cycle_momentum=False)
 
     ## For accurately timing GPU code
-    starter, ender = torch.cuda.Event(enable_timing=True), torch.cuda.Event(enable_timing=True)
-    torch.cuda.synchronize() ## clean up any pre-net setup operations
+    # starter, ender = torch.cuda.Event(enable_timing=True), torch.cuda.Event(enable_timing=True)
+    # torch.cuda.synchronize() ## clean up any pre-net setup operations
 
 
     if True: ## Sometimes we need a conditional/for loop here, this is placed to save the trouble of needing to indent
@@ -570,8 +577,8 @@ def main():
           #################
           # Training Mode #
           #################
-          torch.cuda.synchronize()
-          starter.record()
+        #   torch.cuda.synchronize()
+        #   starter.record()
           net.train()
 
           loss_train = None
@@ -609,7 +616,7 @@ def main():
               opt_bias.zero_grad(set_to_none=True)
               current_steps += 1
 
-              if epoch >= ema_epoch_start and current_steps % hyp['misc']['ema']['every_n_steps'] == 0:          
+              if epoch >= ema_epoch_start and current_steps % hyp['misc']['ema']['every_n_steps'] == 0:
                   ## Initialize the ema from the network at this point in time if it does not already exist.... :D
                   if net_ema is None: # don't snapshot the network yet if so!
                       net_ema = NetworkEMA(net)
@@ -617,9 +624,9 @@ def main():
                   # We warm up our ema's decay/momentum value over training exponentially according to the hyp config dictionary (this lets us move fast, then average strongly at the end).
                   net_ema.update(net, decay=projected_ema_decay_val*(current_steps/total_train_steps)**hyp['misc']['ema']['decay_pow'])
 
-          ender.record()
-          torch.cuda.synchronize()
-          total_time_seconds += 1e-3 * starter.elapsed_time(ender)
+        #   ender.record()
+        #   torch.cuda.synchronize()
+        #   total_time_seconds += 1e-3 * starter.elapsed_time(ender)
 
           ####################
           # Evaluation  Mode #
@@ -629,7 +636,7 @@ def main():
           eval_batchsize = 2500
           assert data['eval']['images'].shape[0] % eval_batchsize == 0, "Error: The eval batchsize must evenly divide the eval dataset (for now, we don't have drop_remainder implemented yet)."
           loss_list_val, acc_list, acc_list_ema = [], [], []
-          
+
           with torch.no_grad():
               for inputs, targets in get_batches(data, key='eval', batchsize=eval_batchsize):
                   if epoch >= ema_epoch_start:
@@ -638,7 +645,7 @@ def main():
                   outputs = net(inputs)
                   loss_list_val.append(loss_fn(outputs, targets).float().mean())
                   acc_list.append((outputs.argmax(-1) == targets.argmax(-1)).float().mean())
-                  
+
               val_acc = torch.stack(acc_list).mean().item()
               ema_val_acc = None
               # TODO: We can fuse these two operations (just above and below) all-together like :D :))))
