@@ -90,7 +90,8 @@ hyp = {
 #                Dataloader                 #
 #############################################
 
-if not os.path.exists(hyp['misc']['data_location']):
+# if not os.path.exists(hyp['misc']['data_location']):
+if True:
 
         transform = transforms.Compose([
             transforms.ToTensor()])
@@ -239,10 +240,31 @@ def get_whitening_parameters(patches):
     # We can then later use this information to map the input information to a nicely distributed sphere, where also
     # the most significant features of the inputs each have their own axis. This significantly cleans things up for the
     # rest of the neural network and speeds up training.
+    import numpy as np
     n,c,h,w = patches.shape
-    est_covariance = torch.cov(patches.view(n, c*h*w).t())
-    eigenvalues, eigenvectors = torch.linalg.eigh(est_covariance, UPLO='U') # this is the same as saying we want our eigenvectors, with the specification that the matrix be an upper triangular matrix (instead of a lower-triangular matrix)
-    return eigenvalues.flip(0).view(-1, 1, 1, 1), eigenvectors.t().reshape(c*h*w,c,h,w).flip(0)
+    x = patches.view(n, c*h*w).t()
+    est_covariance = np.cov(x.cpu().numpy()) # torch.cov does not work
+    # est_covariance = torch.cov(x)
+    eigenvalues, eigenvectors = np.linalg.eigh(est_covariance, UPLO='U')
+    # eigenvalues, eigenvectors = torch.linalg.eigh(est_covariance, UPLO='U') # this is the same as saying we want our eigenvectors, with the specification that the matrix be an upper triangular matrix (instead of a lower-triangular matrix)
+    eigenvalues = torch.tensor(eigenvalues, device=device, dtype=patches.dtype).flip(0).view(-1, 1, 1, 1)
+    eigenvectors = torch.tensor(eigenvectors, device=device, dtype=patches.dtype).t().reshape(c*h*w,c,h,w).flip(0)
+    return eigenvalues, eigenvectors
+
+# def get_whitening_parameters(patches):
+#     # As a high-level summary, we're basically finding the high-dimensional oval that best fits the data here.
+#     # We can then later use this information to map the input information to a nicely distributed sphere, where also
+#     # the most significant features of the inputs each have their own axis. This significantly cleans things up for the
+#     # rest of the neural network and speeds up training.
+#     n,c,h,w = patches.shape
+#     patches = patches.view(n, c*h*w).t()
+#     import numpy as np
+#     dtype = patches.dtype
+#     patches = patches.cpu().numpy()
+#     est_covariance = np.cov(patches)
+#     eigenvalues, eigenvectors = np.linalg.eigh(est_covariance, UPLO='U') # this is the same as saying we want our eigenvectors, with the specification that the matrix be an upper triangular matrix (instead of a lower-triangular matrix)
+#     eigenvalues, eigenvectors = torch.tensor(eigenvalues, device=device, dtype=dtype), torch.tensor(eigenvectors, device=device, dtype=dtype)
+#     return eigenvalues.flip(0).view(-1, 1, 1, 1), eigenvectors.t().reshape(c*h*w,c,h,w).flip(0)
 
 # Run this over the training set to calculate the patch statistics, then set the initial convolution as a non-learnable 'whitening' layer
 def init_whitening_conv(layer, train_set=None, num_examples=None, previous_block_data=None, pad_amount=None, freeze=True, whiten_splits=None):
