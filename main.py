@@ -25,7 +25,7 @@ if os.getenv("TINY_BACKEND") == '1':
     import tinygrad.frontend.torch
     device = torch.device("tiny")
 else:
-    device = torch.device("mps")
+    device = torch.device("cuda")
 print(f'Using {device=}')
 
 ## <-- teaching comments
@@ -128,13 +128,21 @@ if True:
             'eval': eval_dataset_gpu
         }
 
+        # ## Convert dataset to FP16 now for the rest of the process....
+        # data['train']['images'] = data['train']['images'].half().requires_grad_(False)
+        # data['eval']['images']  = data['eval']['images'].half().requires_grad_(False)
+
+        # # Convert this to one-hot to support the usage of cutmix (or whatever strange label tricks/magic you desire!)
+        # data['train']['targets'] = F.one_hot(data['train']['targets']).half()
+        # data['eval']['targets'] = F.one_hot(data['eval']['targets']).half()
+
         ## Convert dataset to FP16 now for the rest of the process....
-        data['train']['images'] = data['train']['images'].half().requires_grad_(False)
-        data['eval']['images']  = data['eval']['images'].half().requires_grad_(False)
+        data['train']['images'] = data['train']['images'].requires_grad_(False)
+        data['eval']['images']  = data['eval']['images'].requires_grad_(False)
 
         # Convert this to one-hot to support the usage of cutmix (or whatever strange label tricks/magic you desire!)
-        data['train']['targets'] = F.one_hot(data['train']['targets']).half()
-        data['eval']['targets'] = F.one_hot(data['eval']['targets']).half()
+        data['train']['targets'] = F.one_hot(data['train']['targets'])
+        data['eval']['targets'] = F.one_hot(data['eval']['targets'])
 
         torch.save(data, hyp['misc']['data_location'])
 
@@ -377,6 +385,7 @@ def make_net():
         for layer_name in net.net_dict.keys():
             if 'conv_group' in layer_name:
                 # Create an implicit residual via a dirac-initialized tensor
+                print(f'main.py shape: {net.net_dict[layer_name].conv1.weight.shape}')
                 dirac_weights_in = torch.nn.init.dirac_(torch.empty_like(net.net_dict[layer_name].conv1.weight))
 
                 # Add the implicit residual to the already-initialized convolutional transition layer.
